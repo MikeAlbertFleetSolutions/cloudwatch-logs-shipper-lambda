@@ -2,6 +2,7 @@ import gzip
 import json
 import logging
 import os
+import re
 
 from shipper import LogzioShipper
 from StringIO import StringIO
@@ -30,6 +31,28 @@ def _parse_cloudwatch_log(log, aws_logs_data, log_type):
         del log['timestamp']
 
     log['message'] = log['message'].replace('\n', '')
+
+    # remove extra stuff: timestamp, tabs, request id label
+    log['message'] = re.sub(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}.[0-9]*Z\s+', '', log['message']).replace("\t", ' ').replace('RequestId: ', '')
+
+    # tag with aws requestid
+    requestid = re.search(r'([a-f0-9]{8}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{12})', log['message'], re.IGNORECASE)
+    if requestid:
+        log['requestid'] = requestid.group(1)
+
+    # tag with metrics
+    metrics = re.search(r'Duration:\s+([0-9.]+)\s+ms\s+Billed\s+Duration:\s+([0-9]+)\s+ms\s+Memory\s+Size:\s+([0-9]+)\s+MB\s+Max\s+Memory\s+Used:\s+([0-9]+)\s+MB', log['message'], re.IGNORECASE)
+    if metrics:
+        log['duration'] = metrics.group(1)
+        log['billed_duration'] = metrics.group(2)
+        log['memory_size'] = metrics.group(3)
+        log['memory_used'] = metrics.group(4)
+
+    # normalize START, END, and REPORT entries
+    elements = re.search(r'(START|END|REPORT)\s+([a-f0-9]{8}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{4}-?[a-f0-9]{12})\s*(.*)', log['message'], re.IGNORECASE)
+    if elements:
+        log['message'] = "{1} {0} {2}".format(elements.group(1), elements.group(2), elements.group(3))
+
     log['logStream'] = aws_logs_data['logStream']
     log['messageType'] = aws_logs_data['messageType']
     log['owner'] = aws_logs_data['owner']
